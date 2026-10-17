@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: justicemitra-app
+    runtime: python
+    region: oregon
+    plan: starter
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false"
+    healthCheckPath: "/_stcore/health"
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DATABASE
+        value: "justicemitra_db"
+      - key: MONGODB_COLLECTION
+        value: "legal_chunks"
+      - key: MONGODB_VECTOR_INDEX
+        value: "vector_index"
+      - key: GEMMA_API_KEY
+        sync: false
+      - key: GEMMA_API_BASE
+        value: "https://api.groq.com/openai/v1"
+      - key: GEMMA_MODEL_NAME
+        value: "gemma2-9b-it"
+      - key: SENTRY_DSN
+        sync: false
+      - key: SENTRY_ENVIRONMENT
+        value: "production"
+      - key: SENTRY_TRACES_SAMPLE_RATE
+        value: "1.0"

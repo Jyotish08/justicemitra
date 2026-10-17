@@ -1,0 +1,20 @@
+# Web UI Presentation Layer
+streamlit>=1.39.0
+
+# Database & Vector Search
+pymongo>=4.9.1
+dnspython>=2.7.0
+
+# Text Embedding & Model Inference
+sentence-transformers>=3.2.0
+openai>=1.51.2
+
+# Document Ingestion CLI (Administrative)
+pypdf>=5.0.1
+
+# Observability & Agent Tracing
+sentry-sdk>=2.16.0
+
+# Configuration & Validation
+pydantic>=2.9.2
+python-dotenv>=1.0.1
