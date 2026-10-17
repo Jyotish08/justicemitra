@@ -12,7 +12,7 @@ from justicemitra.core.sanitizer import scrub_pii
 from justicemitra.services.retriever import LocalFallbackRetriever
 from justicemitra.services.embedding import get_embedding_service
 from justicemitra.services.generation import GemmaOpenAIGateway, EVIDENCE_REFUSAL_MESSAGE
-from justicemitra.observability.telemetry import redact_sensitive_pii
+from justicemitra.observability.telemetry import redact_sensitive_pii, redact_sensitive_transaction
 
 
 @pytest.fixture(scope="module")
@@ -154,3 +154,54 @@ def test_sensitive_telemetry_redaction():
 
     assert "9876543210" not in redacted["exception"]["values"][0]["value"]
     assert "[REDACTED_PHONE]" in redacted["exception"]["values"][0]["value"]
+
+
+def test_sensitive_telemetry_redaction_sdk_dict_breadcrumbs():
+    """Validates that real Sentry SDK breadcrumb dictionary format is scrubbed."""
+    payload = {
+        "breadcrumbs": {
+            "values": [
+                {
+                    "message": "User query: Victim with Aadhaar 9999 8888 7777 reported incident",
+                    "data": {"contact": "+91-9876543210", "email": "help@victimsupport.org"},
+                }
+            ]
+        },
+        "logentry": {
+            "message": "Processing user email confidential@domain.com",
+        },
+        "message": "Uncaught alert for 9876543210",
+    }
+
+    redacted = redact_sensitive_pii(payload, hint={})
+
+    crumb = redacted["breadcrumbs"]["values"][0]
+    assert "9999 8888 7777" not in crumb["message"]
+    assert "[REDACTED_AADHAAR]" in crumb["message"]
+    assert "9876543210" not in crumb["data"]["contact"]
+    assert "[REDACTED_PHONE]" in crumb["data"]["contact"]
+    assert "help@victimsupport.org" not in crumb["data"]["email"]
+    assert "[REDACTED_EMAIL]" in crumb["data"]["email"]
+    assert "confidential@domain.com" not in redacted["logentry"]["message"]
+    assert "[REDACTED_EMAIL]" in redacted["logentry"]["message"]
+    assert "9876543210" not in redacted["message"]
+    assert "[REDACTED_PHONE]" in redacted["message"]
+
+
+def test_sensitive_transaction_redaction():
+    """Validates that transaction span descriptions and metadata are scrubbed of PII."""
+    tx_payload = {
+        "spans": [
+            {
+                "description": "User case search for victim phone 9876543210",
+                "data": {"query_snippet": "Aadhaar 1234 5678 9012 verification"},
+            }
+        ]
+    }
+
+    redacted = redact_sensitive_transaction(tx_payload, hint={})
+    span = redacted["spans"][0]
+    assert "9876543210" not in span["description"]
+    assert "[REDACTED_PHONE]" in span["description"]
+    assert "1234 5678 9012" not in span["data"]["query_snippet"]
+    assert "[REDACTED_AADHAAR]" in span["data"]["query_snippet"]

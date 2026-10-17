@@ -15,29 +15,63 @@ _SENTRY_INITIALIZED = False
 
 def redact_sensitive_pii(event: Dict[str, Any], hint: Dict[str, Any]) -> Dict[str, Any]:
     """Scrubs personal identifiable information and sensitive disclosures from Sentry payloads."""
-    # 1. Scrub log breadcrumbs
+    # 1. Scrub log breadcrumbs (handles both SDK dict values and list representations)
     if "breadcrumbs" in event:
-        for breadcrumb in event.get("breadcrumbs", []):
-            if "message" in breadcrumb and isinstance(breadcrumb["message"], str):
-                breadcrumb["message"] = scrub_pii(breadcrumb["message"])
+        raw_crumbs = event.get("breadcrumbs")
+        crumbs = (
+            raw_crumbs.get("values", [])
+            if isinstance(raw_crumbs, dict)
+            else (raw_crumbs if isinstance(raw_crumbs, list) else [])
+        )
+        for breadcrumb in crumbs:
+            if isinstance(breadcrumb, dict):
+                if "message" in breadcrumb and isinstance(breadcrumb["message"], str):
+                    breadcrumb["message"] = scrub_pii(breadcrumb["message"])
+                if "data" in breadcrumb and isinstance(breadcrumb["data"], dict):
+                    for k, v in breadcrumb["data"].items():
+                        if isinstance(v, str):
+                            breadcrumb["data"][k] = scrub_pii(v)
 
     # 2. Scrub log messages and formatted log entries
     if "logentry" in event and isinstance(event["logentry"], dict):
         if "formatted" in event["logentry"] and isinstance(event["logentry"]["formatted"], str):
             event["logentry"]["formatted"] = scrub_pii(event["logentry"]["formatted"])
+        if "message" in event["logentry"] and isinstance(event["logentry"]["message"], str):
+            event["logentry"]["message"] = scrub_pii(event["logentry"]["message"])
 
-    # 3. Scrub exception descriptions
-    if "exception" in event and "values" in event["exception"]:
+    # 3. Scrub root-level message if present
+    if "message" in event and isinstance(event["message"], str):
+        event["message"] = scrub_pii(event["message"])
+
+    # 4. Scrub exception descriptions
+    if "exception" in event and isinstance(event["exception"], dict) and "values" in event["exception"]:
         for exc in event["exception"].get("values", []):
-            if "value" in exc and isinstance(exc["value"], str):
+            if isinstance(exc, dict) and "value" in exc and isinstance(exc["value"], str):
                 exc["value"] = scrub_pii(exc["value"])
 
+    return event
+
+
+def redact_sensitive_transaction(event: Dict[str, Any], hint: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensures transactions and spans do not accidentally expose sensitive PII."""
+    if "spans" in event and isinstance(event["spans"], list):
+        for span in event["spans"]:
+            if isinstance(span, dict):
+                if "description" in span and isinstance(span["description"], str):
+                    span["description"] = scrub_pii(span["description"])
+                if "data" in span and isinstance(span["data"], dict):
+                    for k, v in span["data"].items():
+                        if isinstance(v, str):
+                            span["data"][k] = scrub_pii(v)
     return event
 
 
 def setup_sentry_tracing(app_config: Optional[AppConfig] = None) -> bool:
     """Initializes the Sentry SDK with strict zero-PII capture and AI Agent Tracing."""
     global _SENTRY_INITIALIZED
+    if _SENTRY_INITIALIZED and is_sentry_active() and app_config is None:
+        return True
+
     cfg = app_config or config
 
     if not cfg.sentry_dsn:
@@ -51,6 +85,7 @@ def setup_sentry_tracing(app_config: Optional[AppConfig] = None) -> bool:
             traces_sample_rate=cfg.sentry_traces_sample_rate,
             send_default_pii=False,  # Enforce zero PII capture by default
             before_send=redact_sensitive_pii,
+            before_send_transaction=redact_sensitive_transaction,
             integrations=[
                 LoggingIntegration(
                     level=logging.INFO,
@@ -68,7 +103,16 @@ def setup_sentry_tracing(app_config: Optional[AppConfig] = None) -> bool:
 
 def is_sentry_active() -> bool:
     """Returns True if Sentry is active and initialized."""
-    return _SENTRY_INITIALIZED and sentry_sdk.Hub.current.client is not None
+    if not _SENTRY_INITIALIZED:
+        return False
+    try:
+        client = sentry_sdk.get_client()
+        return bool(client and client.is_active())
+    except Exception:
+        try:
+            return sentry_sdk.Hub.current.client is not None
+        except Exception:
+            return False
 
 
 @contextmanager
@@ -89,7 +133,7 @@ def start_sanitization_span() -> Generator[Any, None, None]:
         yield None
         return
 
-    with sentry_sdk.start_span(op="gen_ai.input_sanitization", description="Sanitize PII and validate guardrails") as span:
+    with sentry_sdk.start_span(op="gen_ai.input_sanitization", name="Sanitize PII and validate guardrails") as span:
         span.set_data("privacy_scrubbed", True)
         yield span
 
@@ -104,7 +148,7 @@ def start_retrieval_span(
         yield None
         return
 
-    with sentry_sdk.start_span(op="gen_ai.retrieval", description=f"{backend}: {index_name}") as span:
+    with sentry_sdk.start_span(op="gen_ai.retrieval", name=f"{backend}: {index_name}") as span:
         span.set_data("gen_ai.system", "mongodb_atlas")
         yield span
 
@@ -119,7 +163,7 @@ def start_chat_span(
         yield None
         return
 
-    with sentry_sdk.start_span(op="gen_ai.chat", description=f"ChatCompletion {model}") as span:
+    with sentry_sdk.start_span(op="gen_ai.chat", name=f"ChatCompletion {model}") as span:
         span.set_data("gen_ai.system", "gemma")
         span.set_data("gen_ai.request.model", model)
         span.set_data("gen_ai.request.temperature", temperature)
